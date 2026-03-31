@@ -16,14 +16,14 @@ export default function Dashboard() {
   const [repoData, setRepoData] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showRating, setShowRating] = useState(false);
-  const [chatLogs, setChatLogs] = useState<any[]>([]);
+  const chatLogsRef = useRef<any[]>([]);
 
   const scanTextRef = useRef<HTMLDivElement>(null);
 
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url) return;
-    
+
     setLoading(true);
     setError('');
 
@@ -69,18 +69,18 @@ export default function Dashboard() {
         body: JSON.stringify({
           repoUrl: url,
           rating,
-          chatLogs,
+          chatLogs: chatLogsRef.current,
         }),
       });
-      
+
       if (res.ok) {
-      setShowRating(false);
-      setStage(1);
-      setUrl('');
-      setRepoData(null);
-      setChatLogs([]);
-      window.location.href = '/dashboard/history';
-}
+        setShowRating(false);
+        setStage(1);
+        setUrl('');
+        setRepoData(null);
+        chatLogsRef.current = [];
+        window.location.href = '/dashboard/history';
+      }
     } catch (err) {
       console.error(err);
       alert('FAILED TO SAVE REVIEW');
@@ -88,7 +88,8 @@ export default function Dashboard() {
   };
 
   // Fix 4: memoize so RetroChat doesn't infinite loop
-  const handleChatUpdate = useCallback((msgs: any[]) => setChatLogs(msgs), []);
+  // Use a ref (not state) to store chat logs — avoids re-renders that caused infinite update loops
+  const handleChatUpdate = useCallback((msgs: any[]) => { chatLogsRef.current = msgs; }, []);
 
   // Fix 9: trim repoContext before passing to chat
   const repoContext = repoData ? JSON.stringify({
@@ -102,13 +103,13 @@ export default function Dashboard() {
       {/* Sidebar */}
       {stage === 2 && (
         <>
-          <button 
+          <button
             className="md:hidden absolute top-4 left-4 z-50 bg-retro-purple p-2 pixel-border"
             onClick={() => setSidebarOpen(!sidebarOpen)}
           >
             {sidebarOpen ? <X /> : <Menu />}
           </button>
-          
+
           <div className={`
             absolute md:static inset-y-0 left-0 w-80 bg-retro-black z-40 transform transition-transform duration-300 ease-in-out flex flex-col p-4 border-r-2 border-retro-purple
             ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
@@ -132,12 +133,12 @@ export default function Dashboard() {
             <h2 className="text-4xl md:text-6xl text-retro-purple mb-12 text-center glitch-text" data-text="ENTER REPOSITORY">
               ENTER REPOSITORY
             </h2>
-            
+
             {error ? (
               <div className="bg-retro-red/20 pixel-border-red p-8 text-center w-full">
                 <AlertTriangle className="w-16 h-16 text-retro-red mx-auto mb-4" />
                 <h3 className="text-2xl text-retro-red mb-8">{error}</h3>
-                <button 
+                <button
                   onClick={() => setError('')}
                   className="bg-retro-red text-white px-8 py-4 pixel-shadow-red pixel-shadow-red-hover text-xl"
                 >
@@ -154,7 +155,7 @@ export default function Dashboard() {
                   className="w-full bg-retro-black pixel-border p-6 text-xl text-white outline-none focus:pixel-border-green placeholder:text-gray-600"
                   required
                 />
-                <button 
+                <button
                   type="submit"
                   disabled={loading}
                   className="bg-retro-purple text-white px-8 py-6 text-2xl pixel-shadow pixel-shadow-hover disabled:opacity-50 flex justify-center items-center"
@@ -194,14 +195,14 @@ export default function Dashboard() {
 
             {/* Bottom Panel: Chat */}
             <div className="flex-1 overflow-hidden">
-              <RetroChat 
+              <RetroChat
                 repoContext={repoContext}
                 onChatUpdate={handleChatUpdate}
               />
             </div>
 
             {/* Finish Button */}
-            <button 
+            <button
               onClick={() => setShowRating(true)}
               className="bg-retro-green text-black px-8 py-4 text-xl pixel-shadow-green pixel-shadow-green-hover w-full animate-pulse"
             >
@@ -212,7 +213,7 @@ export default function Dashboard() {
       </div>
 
       {showRating && (
-        <PixelRatingModal 
+        <PixelRatingModal
           onSubmit={handleFinish}
           onCancel={() => setShowRating(false)}
         />

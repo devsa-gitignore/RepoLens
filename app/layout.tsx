@@ -1,4 +1,4 @@
-import type {Metadata} from 'next';
+import type { Metadata } from 'next';
 import { ClerkProvider } from '@clerk/nextjs';
 import { VT323 } from 'next/font/google';
 import './globals.css'; // Global styles
@@ -14,11 +14,11 @@ export const metadata: Metadata = {
   description: 'Retro Game Pixel GitHub Repo Reviewer',
 };
 
-export default function RootLayout({children}: {children: React.ReactNode}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <ClerkProvider>
-      <html lang="en" className={`${vt323.variable} font-sans`}>
-        <body suppressHydrationWarning className="bg-retro-black text-white font-vt323 antialiased text-3xl">
+      <html lang="en" suppressHydrationWarning className={`${vt323.variable} font-sans`}>
+        <body suppressHydrationWarning className="bg-retro-black text-white font-vt323 antialiased">
           {children}
         </body>
       </html>
