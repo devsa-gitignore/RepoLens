@@ -10,7 +10,7 @@ const groq = createGroq({
 async function summariseReadme(readme: string): Promise<string> {
   try {
     const { text } = await generateText({
-      model: groq('llama3-8b-8192'),
+      model: groq('llama-3.1-8b-instant'),
       prompt: `Summarise this README in 3-4 sentences, focusing on what the project does, tech stack, and key features:\n\n${readme.slice(0, 3000)}`,
     });
     return text;
@@ -67,15 +67,50 @@ type PlagiarismEvidence = {
 
 function isCodeFile(path: string): boolean {
   const lower = path.toLowerCase();
-  if (COMMON_BOILERPLATE_TOKENS.some(token => lower.includes(token))) return true;
-  if (snippet.length < 40) return true;
-  if (/^(import|export|from|class|interface|type|const|let|var)\s+/i.test(lower)) return true;
-  return false;
+  if (IGNORE_PATH_PARTS.some(part => lower.includes(part))) return false;
   const ext = lower.split('.').pop();
   return !!ext && CODE_EXTENSIONS.has(ext);
+}
+
 function getFileExtension(path: string): string {
   const ext = path.toLowerCase().split('.').pop();
   return ext || '';
+}
+
+function normalizeCode(code: string): string {
+  return code
+    .replace(/\/\/.*$/gm, '')        // strip single-line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '') // strip block comments
+    .replace(/["'`]/g, '"')          // normalise quotes
+    .replace(/\s+/g, ' ')            // collapse whitespace
+    .trim();
+}
+
+function isLowSignalSnippet(line: string): boolean {
+  const lower = line.toLowerCase();
+  return (
+    COMMON_BOILERPLATE_TOKENS.some(token => lower.includes(token)) ||
+    /^(import|export|from|require)\s+/i.test(line) ||
+    line.length < 40
+  );
+}
+
+async function fetchFileContent(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<string | null> {
+  try {
+    const res = await octokit.git.getBlob({ owner, repo, file_sha: sha });
+    const encoding = res.data.encoding as string;
+    if (encoding === 'base64') {
+      return Buffer.from(res.data.content, 'base64').toString('utf-8');
+    }
+    return res.data.content;
+  } catch {
+    return null;
+  }
 }
 
 function extractSearchSnippets(path: string, content: string): Array<{ snippet: string; sourcePath: string; extension: string }> {
@@ -214,8 +249,11 @@ async function detectPlagiarism(
   }
 
   const evidence: PlagiarismEvidence[] = [];
+  let codeSearchAvailable = true;
 
   for (const candidate of snippets) {
+    if (!codeSearchAvailable) break;
+
     const querySnippet = sanitizeSearchSnippet(candidate.snippet);
     if (querySnippet.length < 35) continue;
 
@@ -238,7 +276,14 @@ async function detectPlagiarism(
         matches: result.data.total_count,
         uniqueRepos,
       });
-    } catch {
+    } catch (err: any) {
+      // 403 = token lacks code-search permission — stop immediately instead of
+      // firing all remaining queries that will also 403.
+      if (err?.status === 403) {
+        codeSearchAvailable = false;
+        console.warn('[repo-check] GitHub Code Search 403: token needs `public_repo` scope (classic PAT) or "Code search" read access (fine-grained PAT). Skipping plagiarism checks.');
+        break;
+      }
       evidence.push({
         snippet: querySnippet,
         sourcePath: candidate.sourcePath,
@@ -253,62 +298,6 @@ async function detectPlagiarism(
   const score = computePlagiarismScore(deduped, snippets.length);
 
   return { score, evidence: deduped };
-}
-  const contents = await Promise.all(
-    candidates.map(file => fetchFileContent(octokit, owner, repo, file.sha)),
-  );
-
-  const normalizedFiles = contents
-    .filter((content): content is string => !!content)
-    .map(normalizeCode)
-    .filter(content => content.length >= 240);
-
-  const snippets = extractSnippets(normalizedFiles);
-  if (snippets.length === 0) {
-    return { score: 0, evidence: [] };
-  }
-
-  const evidence: PlagiarismEvidence[] = [];
-
-  for (const snippet of snippets) {
-    const querySnippet = snippet.slice(0, 140).replace(/"/g, '');
-    const q = `"${querySnippet}" in:file -repo:${owner}/${repo}`;
-
-    try {
-      const result = await octokit.search.code({ q, per_page: 10 });
-      const uniqueRepos = Array.from(
-        new Set(
-          result.data.items
-            .map(item => item.repository?.full_name)
-            .filter((fullName): fullName is string => !!fullName),
-        ),
-      );
-
-      evidence.push({
-        snippet,
-        matches: result.data.total_count,
-        uniqueRepos,
-      });
-    } catch {
-      evidence.push({
-        snippet,
-        matches: 0,
-        uniqueRepos: [],
-      });
-    }
-  }
-
-  const totalMatches = evidence.reduce((sum, item) => sum + Math.min(item.matches, 20), 0);
-  const uniqueRepoCount = new Set(evidence.flatMap(item => item.uniqueRepos)).size;
-  const matchedSnippetCount = evidence.filter(item => item.matches > 0).length;
-
-  const matchScore = Math.min(100, totalMatches * 1.8);
-  const repoSpreadScore = Math.min(100, uniqueRepoCount * 12);
-  const snippetConsistencyScore = (matchedSnippetCount / Math.max(snippets.length, 1)) * 100;
-
-  const score = Math.round((matchScore * 0.5) + (repoSpreadScore * 0.25) + (snippetConsistencyScore * 0.25));
-
-  return { score: Math.min(100, Math.max(0, score)), evidence };
 }
 
 export async function POST(req: Request) {
@@ -357,9 +346,7 @@ export async function POST(req: Request) {
     const mainLanguage = Object.keys(langs.data)[0] || 'Unknown';
 
     const repoFiles: RepoFile[] = files
-      .filter((f): f is { path: string; sha: string; size?: number } =>
-        typeof f.path === 'string' && typeof f.sha === 'string',
-      )
+      .filter((f) => typeof f.path === 'string' && typeof f.sha === 'string')
       .map(f => ({
         path: f.path,
         sha: f.sha,

@@ -36,7 +36,7 @@ function normalizeChatLogs(input: unknown): Array<{ role: 'user' | 'assistant'; 
   return input
     .map((item) => item as RawChatMessage)
     .map((message) => ({
-      role: message?.role === 'assistant' ? 'assistant' : 'user',
+      role: (message?.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
       content: extractMessageText(message),
     }))
     .filter((message) => message.content.length > 0)
