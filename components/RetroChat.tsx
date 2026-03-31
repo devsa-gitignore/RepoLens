@@ -2,18 +2,20 @@
 
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { animate } from 'animejs';
 
 export default function RetroChat({ repoContext, onChatUpdate }: { repoContext: string, onChatUpdate: (messages: any[]) => void }) {
   const [input, setInput] = useState('');
-  
-  const { messages, sendMessage, status } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-      body: { repoContext },
-    })
-  });
+
+  // Memoize transport so it's not recreated on every render (which would cause useChat to
+  // reinitialize → new messages object → effects fire → parent setState → infinite loop)
+  const transport = useMemo(() => new DefaultChatTransport({
+    api: '/api/chat',
+    body: { repoContext },
+  }), [repoContext]);
+
+  const { messages, sendMessage, status } = useChat({ transport });
 
   const isLoading = status === 'submitted' || status === 'streaming';
 
@@ -38,8 +40,13 @@ export default function RetroChat({ repoContext, onChatUpdate }: { repoContext: 
   }, [messages]);
 
   const stableOnChatUpdate = useCallback(onChatUpdate, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const prevMessagesRef = useRef<string>('');
   useEffect(() => {
-    stableOnChatUpdate(messages);
+    const serialized = JSON.stringify(messages);
+    if (serialized !== prevMessagesRef.current) {
+      prevMessagesRef.current = serialized;
+      stableOnChatUpdate(messages);
+    }
   }, [messages, stableOnChatUpdate]);
 
   useEffect(() => {
