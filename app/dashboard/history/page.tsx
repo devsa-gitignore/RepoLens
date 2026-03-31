@@ -3,6 +3,22 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
+const getMessageText = (msg: any): string => {
+  if (typeof msg?.content === 'string' && msg.content.trim()) {
+    return msg.content.trim();
+  }
+
+  if (Array.isArray(msg?.parts)) {
+    return msg.parts
+      .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
+      .map((part: any) => part.text)
+      .join(' ')
+      .trim();
+  }
+
+  return '';
+};
+
 export default function History() {
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,18 +89,21 @@ export default function History() {
                 <div className="mt-4">
                   <div className="text-retro-purple text-sm mb-2">CHAT LOG</div>
                   <div className="flex flex-col gap-2 max-h-60 overflow-y-auto">
-                    {review.chatLogs.map((msg: any, j: number) => (
-                      <div key={j} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <span className={`text-xs mb-1 ${msg.role === 'user' ? 'text-retro-green' : 'text-retro-purple'}`}>
-                          {msg.role === 'user' ? 'JUDGE' : 'AI'}
-                        </span>
-                        <div className={`p-2 text-sm max-w-[80%] ${msg.role === 'user' ? 'bg-retro-green/20 pixel-border-green' : 'bg-retro-purple/20 pixel-border'}`}>
-                          {msg.parts?.map((part: any, k: number) =>
-                            part.type === 'text' ? <span key={k}>{part.text}</span> : null
-                          )}
+                    {review.chatLogs.map((msg: any, j: number) => {
+                      const text = getMessageText(msg);
+                      if (!text) return null;
+
+                      return (
+                        <div key={j} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                          <span className={`text-xs mb-1 ${msg.role === 'user' ? 'text-retro-green' : 'text-retro-purple'}`}>
+                            {msg.role === 'user' ? 'JUDGE' : 'AI'}
+                          </span>
+                          <div className={`p-2 text-sm max-w-[80%] whitespace-pre-wrap ${msg.role === 'user' ? 'bg-retro-green/20 pixel-border-green' : 'bg-retro-purple/20 pixel-border'}`}>
+                            {text}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

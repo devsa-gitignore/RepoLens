@@ -54,77 +54,143 @@ const COMMON_BOILERPLATE_TOKENS = [
 type RepoFile = {
   path: string;
   sha: string;
-  size: number;
+  size?: number;
 };
 
 type PlagiarismEvidence = {
   snippet: string;
+  sourcePath: string;
+  extension: string;
   matches: number;
   uniqueRepos: string[];
 };
 
 function isCodeFile(path: string): boolean {
   const lower = path.toLowerCase();
-  if (IGNORE_PATH_PARTS.some(part => lower.includes(part))) return false;
+  if (COMMON_BOILERPLATE_TOKENS.some(token => lower.includes(token))) return true;
+  if (snippet.length < 40) return true;
+  if (/^(import|export|from|class|interface|type|const|let|var)\s+/i.test(lower)) return true;
+  return false;
   const ext = lower.split('.').pop();
   return !!ext && CODE_EXTENSIONS.has(ext);
+function getFileExtension(path: string): string {
+  const ext = path.toLowerCase().split('.').pop();
+  return ext || '';
 }
 
-function normalizeCode(content: string): string {
-  return content
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|\s+)\/\/.*$/gm, ' ')
-    .replace(/(^|\s+)#.*$/gm, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
+function extractSearchSnippets(path: string, content: string): Array<{ snippet: string; sourcePath: string; extension: string }> {
+  const snippets: Array<{ snippet: string; sourcePath: string; extension: string }> = [];
+  const extension = getFileExtension(path);
+  const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
 
-function isLowSignalSnippet(snippet: string): boolean {
-  const lower = snippet.toLowerCase();
-  return COMMON_BOILERPLATE_TOKENS.some(token => lower.includes(token));
-}
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, ' ').trim();
+    if (line.length < 45 || line.length > 160) continue;
+    if (!/[a-zA-Z_]/.test(line)) continue;
+    if (!/[(){}.=<>\[\]:]/.test(line)) continue;
+    if (isLowSignalSnippet(line)) continue;
 
-function extractSnippets(normalizedFiles: string[]): string[] {
-  const snippets: string[] = [];
+    const normalized = normalizeCode(line);
+    if (normalized.length < 35) continue;
+    if (snippets.some(existing => existing.snippet === normalized)) continue;
 
-  for (const content of normalizedFiles) {
-    if (content.length < 240) continue;
+    snippets.push({
+      snippet: normalized,
+      sourcePath: path,
+      extension,
+    });
 
-    const windowSize = 180;
-    const startPositions = [
-      Math.floor(content.length * 0.2),
-      Math.floor(content.length * 0.5),
-      Math.floor(content.length * 0.75),
-    ];
-
-    for (const pos of startPositions) {
-      const start = Math.max(0, Math.min(pos, content.length - windowSize));
-      const snippet = content.slice(start, start + windowSize).trim();
-
-      if (snippet.length < 120 || isLowSignalSnippet(snippet)) continue;
-      if (snippets.some(existing => existing.includes(snippet) || snippet.includes(existing))) continue;
-
-      snippets.push(snippet);
-      if (snippets.length >= 3) return snippets;
-    }
+    if (snippets.length >= 4) break;
   }
 
   return snippets;
 }
 
-async function fetchFileContent(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  fileSha: string,
-): Promise<string | null> {
-  try {
-    const blob = await octokit.git.getBlob({ owner, repo, file_sha: fileSha });
-    return Buffer.from(blob.data.content, 'base64').toString('utf-8');
-  } catch {
-    return null;
+function rankCandidateFiles(files: RepoFile[]): RepoFile[] {
+  const scored = files
+    .filter(f => isCodeFile(f.path))
+    .map(file => {
+      const size = typeof file.size === 'number' ? file.size : -1;
+      const sizePenalty = size > 220_000 ? -2 : 0;
+      const hasKnownSize = size >= 0 ? 1 : 0;
+      const usefulSize = size >= 80 || size === -1 ? 1 : -2;
+      const depthBonus = file.path.split('/').length > 2 ? 0.5 : 0;
+      const extBonus = ['ts', 'tsx', 'py', 'java', 'go', 'rs', 'cpp', 'cs'].includes(getFileExtension(file.path)) ? 1 : 0;
+      const score = hasKnownSize + usefulSize + depthBonus + extBonus + sizePenalty;
+      return { file, score };
+    })
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, 12).map(item => item.file);
+}
+
+function extensionQuery(ext: string): string {
+  return ext ? ` extension:${ext}` : '';
+}
+
+function computePlagiarismScore(evidence: PlagiarismEvidence[], snippetCount: number): number {
+  const totalMatches = evidence.reduce((sum, item) => sum + Math.min(item.matches, 15), 0);
+  const uniqueRepoCount = new Set(evidence.flatMap(item => item.uniqueRepos)).size;
+  const matchedSnippetCount = evidence.filter(item => item.matches > 0).length;
+  const strongHitCount = evidence.filter(item => item.matches >= 3).length;
+
+  const matchVolumeScore = Math.min(100, totalMatches * 2.2);
+  const repoDiversityScore = Math.min(100, uniqueRepoCount * 10);
+  const consistencyScore = (matchedSnippetCount / Math.max(snippetCount, 1)) * 100;
+  const strongHitScore = (strongHitCount / Math.max(snippetCount, 1)) * 100;
+
+  const rawScore =
+    (matchVolumeScore * 0.4) +
+    (repoDiversityScore * 0.2) +
+    (consistencyScore * 0.25) +
+    (strongHitScore * 0.15);
+
+  return Math.round(Math.min(100, Math.max(0, rawScore)));
+}
+
+function uniqueEvidence(evidence: PlagiarismEvidence[]): PlagiarismEvidence[] {
+  const seen = new Set<string>();
+  const deduped: PlagiarismEvidence[] = [];
+
+  for (const item of evidence) {
+    const key = `${item.sourcePath}::${item.snippet}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
   }
+
+  return deduped;
+}
+
+function sanitizeSearchSnippet(snippet: string): string {
+  return snippet
+    .replace(/["'`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+function capSearchSnippetCount<T>(items: T[], maxCount: number): T[] {
+  return items.slice(0, maxCount);
+}
+
+function hasLikelyCodeSignal(content: string): boolean {
+  const normalized = normalizeCode(content);
+  if (normalized.length < 120) return false;
+  return /function|class|return|if\s*\(|for\s*\(|while\s*\(|=>/.test(normalized);
+}
+
+function collectSnippetCandidates(files: Array<{ path: string; content: string | null }>): Array<{ snippet: string; sourcePath: string; extension: string }> {
+  const snippets: Array<{ snippet: string; sourcePath: string; extension: string }> = [];
+
+  for (const file of files) {
+    if (!file.content || !hasLikelyCodeSignal(file.content)) continue;
+    snippets.push(...extractSearchSnippets(file.path, file.content));
+    if (snippets.length >= 20) break;
+  }
+
+  return capSearchSnippetCount(snippets, 18);
 }
 
 async function detectPlagiarism(
@@ -133,11 +199,61 @@ async function detectPlagiarism(
   repo: string,
   files: RepoFile[],
 ): Promise<{ score: number; evidence: PlagiarismEvidence[] }> {
-  const candidates = files
-    .filter(f => isCodeFile(f.path) && f.size > 80 && f.size < 220_000)
-    .sort((a, b) => b.size - a.size)
-    .slice(0, 8);
+  const candidates = rankCandidateFiles(files);
 
+  const filePayloads = await Promise.all(
+    candidates.map(async (file) => ({
+      path: file.path,
+      content: await fetchFileContent(octokit, owner, repo, file.sha),
+    })),
+  );
+
+  const snippets = collectSnippetCandidates(filePayloads);
+  if (snippets.length === 0) {
+    return { score: 0, evidence: [] };
+  }
+
+  const evidence: PlagiarismEvidence[] = [];
+
+  for (const candidate of snippets) {
+    const querySnippet = sanitizeSearchSnippet(candidate.snippet);
+    if (querySnippet.length < 35) continue;
+
+    const q = `"${querySnippet}" in:file -repo:${owner}/${repo}${extensionQuery(candidate.extension)}`;
+
+    try {
+      const result = await octokit.search.code({ q, per_page: 10 });
+      const uniqueRepos = Array.from(
+        new Set(
+          result.data.items
+            .map(item => item.repository?.full_name)
+            .filter((fullName): fullName is string => !!fullName),
+        ),
+      );
+
+      evidence.push({
+        snippet: querySnippet,
+        sourcePath: candidate.sourcePath,
+        extension: candidate.extension,
+        matches: result.data.total_count,
+        uniqueRepos,
+      });
+    } catch {
+      evidence.push({
+        snippet: querySnippet,
+        sourcePath: candidate.sourcePath,
+        extension: candidate.extension,
+        matches: 0,
+        uniqueRepos: [],
+      });
+    }
+  }
+
+  const deduped = uniqueEvidence(evidence);
+  const score = computePlagiarismScore(deduped, snippets.length);
+
+  return { score, evidence: deduped };
+}
   const contents = await Promise.all(
     candidates.map(file => fetchFileContent(octokit, owner, repo, file.sha)),
   );
@@ -197,6 +313,20 @@ async function detectPlagiarism(
 
 export async function POST(req: Request) {
   try {
+    if (!process.env.GITHUB_TOKEN) {
+      return NextResponse.json(
+        { error: 'GitHub scanning is not configured. Add GITHUB_TOKEN to .env.local and restart the dev server.' },
+        { status: 503 },
+      );
+    }
+
+    if (!process.env.GROQ_API_KEY) {
+      return NextResponse.json(
+        { error: 'AI README summary is not configured. Add GROQ_API_KEY to .env.local and restart the dev server.' },
+        { status: 503 },
+      );
+    }
+
     const { url } = await req.json();
     const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
     if (!match) return NextResponse.json({ error: 'Invalid GitHub URL' }, { status: 400 });
@@ -270,6 +400,7 @@ export async function POST(req: Request) {
       readmeContent: readmeSummary,
       plagiarismEvidence: plagiarismResult.evidence.map(item => ({
         snippetPreview: item.snippet.slice(0, 100),
+        sourcePath: item.sourcePath,
         matches: item.matches,
         uniqueRepos: item.uniqueRepos.slice(0, 5),
       })),

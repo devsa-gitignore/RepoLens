@@ -43,13 +43,13 @@ export default function FileTree({ tree }: { tree: FileNode[] }) {
           </li>
         )}
       </ul>
-      {hasMoreFiles && (
+      {hasMoreFiles && showAll && (
         <button
           type="button"
-          onClick={() => setShowAll((prev) => !prev)}
+          onClick={() => setShowAll(false)}
           className="mt-4 text-retro-green text-sm hover:text-retro-purple"
         >
-          {showAll ? 'Show less' : 'Show all files'}
+          Show less
         </button>
       )}
     </div>

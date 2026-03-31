@@ -73,14 +73,20 @@ export default function Dashboard() {
         }),
       });
 
-      if (res.ok) {
-        setShowRating(false);
-        setStage(1);
-        setUrl('');
-        setRepoData(null);
-        chatLogsRef.current = [];
-        window.location.href = '/dashboard/history';
+      const payload = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const message = payload?.error || 'Failed to save review.';
+        alert(message);
+        return;
       }
+
+      setShowRating(false);
+      setStage(1);
+      setUrl('');
+      setRepoData(null);
+      chatLogsRef.current = [];
+      window.location.href = '/dashboard/history';
     } catch (err) {
       console.error(err);
       alert('FAILED TO SAVE REVIEW');
