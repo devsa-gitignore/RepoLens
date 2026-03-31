@@ -7,6 +7,11 @@ export default function History() {
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const getRatingPercent = (rating: number) => {
+    const safeRating = Math.max(0, Math.min(5, Number(rating) || 0));
+    return `${(safeRating / 5) * 100}%`;
+  };
+
   useEffect(() => {
     fetch('/api/get-reviews')
       .then(res => res.json())
@@ -20,7 +25,7 @@ export default function History() {
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-8">
-        <h2 className="text-4xl text-retro-purple glitch-text  text-xl" data-text="REVIEW HISTORY">
+        <h2 className="text-4xl text-retro-purple glitch-text" data-text="REVIEW HISTORY">
           REVIEW HISTORY
         </h2>
         <Link href="/dashboard" className="bg-retro-purple text-white px-6 py-3 pixel-shadow pixel-shadow-hover text-xl">
@@ -29,7 +34,7 @@ export default function History() {
       </div>
 
       {loading ? (
-        <div className="text-retro-green text-2xl animate-pulse text-center mt-20 text-xl">
+        <div className="text-retro-green text-2xl animate-pulse text-center mt-20">
           LOADING SAVE DATA...
         </div>
       ) : reviews.length === 0 ? (
@@ -49,8 +54,14 @@ export default function History() {
                 >
                   {review.repoUrl}
                 </a>
-                <div className="text-retro-purple text-xl shrink-0">
-                  {'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}
+                <div className="text-retro-purple text-xl shrink-0 flex items-center gap-2">
+                  <div className="relative leading-none tracking-[2px]">
+                    <div className="text-gray-700">★★★★★</div>
+                    <div className="absolute left-0 top-0 overflow-hidden text-retro-purple" style={{ width: getRatingPercent(review.rating) }}>
+                      ★★★★★
+                    </div>
+                  </div>
+                  <span className="text-retro-green text-base">{Number(review.rating).toFixed(1)}</span>
                 </div>
               </div>
 

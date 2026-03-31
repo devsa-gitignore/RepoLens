@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { File, Folder } from 'lucide-react';
 
 interface FileNode {
@@ -8,9 +9,13 @@ interface FileNode {
 }
 
 export default function FileTree({ tree }: { tree: FileNode[] }) {
+  const [showAll, setShowAll] = useState(false);
+
   if (!tree || tree.length === 0) return <div className="text-gray-500">No files found.</div>;
 
-  const displayTree = tree.slice(0, 20);
+  const maxVisible = 20;
+  const hasMoreFiles = tree.length > maxVisible;
+  const displayTree = showAll ? tree : tree.slice(0, maxVisible);
 
   return (
     <div className="p-4 pixel-border bg-retro-black/80 h-full overflow-y-auto">
@@ -26,8 +31,27 @@ export default function FileTree({ tree }: { tree: FileNode[] }) {
             <span className="truncate">{node.path}</span>
           </li>
         ))}
-        {tree.length > 20 && <li className="text-gray-500">...and {tree.length - 20} more</li>}
+        {hasMoreFiles && !showAll && (
+          <li>
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="text-gray-400 text-sm hover:text-retro-green"
+            >
+              +{tree.length - maxVisible} more files
+            </button>
+          </li>
+        )}
       </ul>
+      {hasMoreFiles && (
+        <button
+          type="button"
+          onClick={() => setShowAll((prev) => !prev)}
+          className="mt-4 text-retro-green text-sm hover:text-retro-purple"
+        >
+          {showAll ? 'Show less' : 'Show all files'}
+        </button>
+      )}
     </div>
   );
 }
